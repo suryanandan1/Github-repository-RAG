@@ -1,0 +1,9 @@
+streamlit
+GitPython
+python-dotenv
+
+chromadb
+mistralai
+
+langchain
+langchain-text-splitters
