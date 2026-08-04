@@ -1,38 +1,40 @@
 import os
 
-from mistralai import Mistral
 from dotenv import load_dotenv
-from src.llm_service import ask_repository
+from mistralai import Mistral
 
 load_dotenv()
 
 client = Mistral(
-    api_key=os.getenv(
-        "MISTRAL_API_KEY"
-    )
+    api_key=os.getenv("MISTRALAI_API_KEY")
 )
 
 
 def ask_repository(
     question,
-    context
+    context,
+    chat_history=""
 ):
 
     prompt = f"""
 You are a senior software engineer.
 
-Repository Context:
+Chat History:
+{chat_history}
 
+Repository Context:
 {context}
 
 Question:
-
 {question}
 
 Rules:
-1. Answer only from repository code.
-2. Mention filenames if possible.
-3. If information is missing say so.
+1. If the question is about the repository, answer using repository context.
+2. Mention filenames whenever possible.
+3. If repository information is insufficient, say so.
+4. If the question is a general software/programming question unrelated to the repository, answer normally using your knowledge.
+5. Clearly separate repository-based answers from general knowledge.
+6. Do not invent code that is not present in the repository.
 """
 
     response = client.chat.complete(
