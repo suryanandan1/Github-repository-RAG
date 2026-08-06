@@ -1,6 +1,8 @@
 import os
+import re
 import uuid
 
+import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -52,6 +54,13 @@ from src.github_api import (
     get_user_repositories,
     search_repositories,
     build_authenticated_clone_url
+)
+
+from src.commit_service import (
+    get_recent_commits,
+    get_commit_analytics,
+    summarize_commits,
+    CommitServiceError
 )
 
 load_dotenv()
@@ -145,6 +154,40 @@ if "github_repositories" not in st.session_state:
 if "trigger_explorer_load" not in st.session_state:
     st.session_state.trigger_explorer_load = False
 
+# ---- Commit Intelligence state ----
+
+if "commits" not in st.session_state:
+    st.session_state.commits = []
+
+if "commit_summary" not in st.session_state:
+    st.session_state.commit_summary = ""
+
+if "commit_stats" not in st.session_state:
+    st.session_state.commit_stats = {}
+
+
+def extract_repo_full_name(url):
+    """
+    Best-effort extraction of "owner/repo" from a GitHub URL, so
+    Commit Intelligence works in manual URL mode too, not just
+    when a repository was picked via the Repository Explorer.
+    """
+
+    if not url:
+        return None
+
+    match = re.search(
+        r"github\.com[/:]([^/]+)/([^/.\s]+)",
+        url
+    )
+
+    if not match:
+        return None
+
+    owner, name = match.group(1), match.group(2)
+
+    return f"{owner}/{name}"
+
 # --------------------------------------------------
 # GitHub OAuth Callback Handling
 # --------------------------------------------------
@@ -195,6 +238,13 @@ if "code" in query_params and not st.session_state.github_logged_in:
 def process_repository(clone_url, display_url):
 
     st.session_state.messages = []
+
+    # Reset Commit Intelligence state - independent feature, but
+    # commit data from a previously loaded repo shouldn't persist
+    # once a different repository is processed.
+    st.session_state.commits = []
+    st.session_state.commit_stats = {}
+    st.session_state.commit_summary = ""
 
     clone_path = os.path.join(
         REPO_STORAGE_PATH,
@@ -577,6 +627,109 @@ with st.sidebar:
             "Log in with GitHub to browse and load your "
             "repositories here."
         )
+
+    # ------------------------------
+    # Commit Intelligence
+    # ------------------------------
+    # Lives in the Repository Explorer section, works in both
+    # login and manual URL modes. Nothing runs automatically -
+    # commit history is only fetched, analyzed, or summarized
+    # when one of these buttons is explicitly clicked. Results
+    # render on the main screen once available.
+
+    st.markdown("**Commit Intelligence**")
+
+    active_repo_name = None
+
+    if st.session_state.selected_repository:
+        active_repo_name = (
+            st.session_state.selected_repository["full_name"]
+        )
+    elif st.session_state.loaded_repo_url:
+        active_repo_name = extract_repo_full_name(
+            st.session_state.loaded_repo_url
+        )
+
+    if st.button(
+        "Load Commit History",
+        use_container_width=True,
+        disabled=not st.session_state.repo_loaded
+    ):
+
+        try:
+
+            with st.spinner("Loading commits..."):
+
+                commits = get_recent_commits(
+                    active_repo_name,
+                    limit=50,
+                    access_token=st.session_state.github_token
+                )
+
+            st.session_state.commits = commits
+            st.session_state.commit_stats = {}
+            st.session_state.commit_summary = ""
+
+            if not commits:
+                st.info(
+                    "No commits were found for this repository."
+                )
+
+            st.rerun()
+
+        except CommitServiceError as e:
+            st.error(str(e))
+
+        except Exception as e:
+            st.error(
+                f"Unexpected error loading commits: {e}"
+            )
+
+    if st.session_state.commits:
+
+        if st.button(
+            "📊 Commit Analytics",
+            use_container_width=True
+        ):
+
+            try:
+                st.session_state.commit_stats = (
+                    get_commit_analytics(
+                        st.session_state.commits
+                    )
+                )
+                st.rerun()
+
+            except Exception as e:
+                st.error(
+                    f"Failed to compute commit analytics: {e}"
+                )
+
+        if st.button(
+            "🤖 Commit Summary",
+            use_container_width=True
+        ):
+
+            try:
+
+                with st.spinner(
+                    "Generating commit summary..."
+                ):
+                    st.session_state.commit_summary = (
+                        summarize_commits(
+                            st.session_state.commits
+                        )
+                    )
+
+                st.rerun()
+
+            except CommitServiceError as e:
+                st.error(str(e))
+
+            except Exception as e:
+                st.error(
+                    f"Unexpected error generating summary: {e}"
+                )
 
     st.divider()
 
@@ -1031,6 +1184,97 @@ else:
 
         st.markdown(
             st.session_state.architecture_analysis
+        )
+
+# --------------------------------------------------
+# Commit History (Commit Intelligence)
+# --------------------------------------------------
+# Shown only once commit history has actually been loaded - never
+# fetched automatically.
+
+if st.session_state.commits:
+
+    st.divider()
+
+    st.header("Commit History")
+
+    commit_rows = [
+        {
+            "SHA": commit["sha"],
+            "Author": commit["author"],
+            "Message": commit["message"],
+            "Date": commit["date"]
+        }
+        for commit in st.session_state.commits
+    ]
+
+    st.dataframe(
+        commit_rows,
+        use_container_width=True
+    )
+
+    # ------------------------------
+    # Commit Analytics
+    # ------------------------------
+
+    if st.session_state.commit_stats:
+
+        st.subheader("Commit Analytics")
+
+        stats = st.session_state.commit_stats
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.metric(
+                "Total Commits",
+                stats.get("total_commits", 0)
+            )
+
+        with col2:
+            st.metric(
+                "Most Active Contributor",
+                stats.get("most_active_contributor") or "—"
+            )
+
+        top_contributors = stats.get(
+            "top_contributors", []
+        )
+
+        if top_contributors:
+
+            st.markdown("**Top Contributors**")
+
+            contributor_rows = [
+                {
+                    "Contributor": name,
+                    "Commits": count
+                }
+                for name, count in top_contributors
+            ]
+
+            st.dataframe(
+                contributor_rows,
+                use_container_width=True
+            )
+
+            st.bar_chart(
+                data=pd.Series(
+                    dict(top_contributors),
+                    name="Commits"
+                )
+            )
+
+    # ------------------------------
+    # Commit Summary
+    # ------------------------------
+
+    if st.session_state.commit_summary:
+
+        st.subheader("Commit Summary")
+
+        st.markdown(
+            st.session_state.commit_summary
         )
 
 # --------------------------------------------------
