@@ -7,3 +7,15 @@ mistralai
 
 langchain
 langchain-text-splitters
+
+# --------------------------------------------------
+# Phase 6: additions for GitHub OAuth + Repository Explorer
+# --------------------------------------------------
+# Add these to your existing requirements.txt (or merge versions
+# if you already pin some of these).
+
+requests>=2.31.0
+
+# st.query_params and st.link_button require a reasonably recent
+# Streamlit. If your current pin is older than this, bump it.
+streamlit>=1.32.0
