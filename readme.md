@@ -1,61 +1,46 @@
 # GitHub Repository Assistant
 
-An AI-powered GitHub Repository Assistant built with Streamlit, ChromaDB, Mistral AI, and RAG (Retrieval-Augmented Generation).
-
-The application allows users to provide any GitHub repository URL and interact with the repository through an intelligent chat interface. It analyzes source code, generates repository summaries, detects technologies, visualizes dependencies, reviews code quality, and answers repository-specific questions.
+An AI-powered Streamlit app that clones a GitHub repository, indexes its code with embeddings, and lets you chat with it — ask questions, get a summary, review dependencies, check code health, and more. Supports both pasting a public repo URL and logging in with GitHub to browse and load your own public, private, and organization repositories.
 
 ---
 
-# Features
+## Features
 
-## Repository Processing
+### Repository Indexing
+- Clone any public repository by URL, or load one directly from your GitHub account
+- Extracts and chunks Python source files
+- Generates embeddings and stores them in ChromaDB
+- Progress bar during indexing
 
-- Clone any public GitHub repository
-- Read Python source files automatically
-- Create intelligent code chunks
-- Generate embeddings
-- Store vectors in ChromaDB
-- Build repository knowledge base
+### Repository Insights
+- **Repository Summary** — LLM-generated overview of purpose, functionality, and architecture
+- **Repository Statistics** — Python file count, total lines, largest file
+- **Repository Health Score** — heuristic score out of 100
+- **Dependency Graph** — imports per file
+- **Tech Stack Detection** — frameworks/libraries in use
+- **Code Review** — LLM-generated recommendations (architecture, performance, security, code quality, scalability)
+- **Architecture Analysis** — LLM-generated structural/architecture overview
+- **File Preview** — browse and view any indexed file's source
 
----
+### Chat
+- Ask natural-language questions about the repository (RAG-backed via ChromaDB retrieval)
+- **Streamed, ChatGPT-style responses** — answers appear token-by-token with a typing cursor (▌)
+- **Conversation memory** — last 10 messages are passed to the model, so follow-ups like *"who created it?"* resolve back to the repository being discussed
+- **Automatic question routing** — repository questions use retrieval; general programming questions (e.g. *"What is OOP?"*) are answered directly without touching the repository
+- **Quick Actions** — one-click buttons for common questions (Summarize Repository, Explain Architecture, List Main Classes/Functions, Show Dependencies, Show Tech Stack, Show Repository Health)
+- **Clickable Chat History** — click any past question to resend it
+- **New Chat** — clears the conversation only; the repository, its embeddings, and ChromaDB data are untouched
 
-## AI Repository Chat
-
-Ask questions such as:
-
-- What does this repository do?
-- Explain the project architecture.
-- How do I run this project?
-- What are the important files?
-- Explain a specific function.
-- List all classes.
-- What technologies are used?
-
-The assistant retrieves relevant code context before generating answers.
-
----
-
-## Repository Summary
-
-Automatically generates:
-
-- Project overview
-- Core functionality
-- Important modules
-- Architecture explanation
+### GitHub OAuth & Repository Explorer
+- **Login with GitHub** — OAuth flow with profile display (avatar, name, followers, public repo count)
+- **Repository Explorer** — browse your repositories (owned, collaborator, and organization), with search
+- **One-click load** — select a repo and load it directly, no manual URL needed
+- **Private repository support** — authenticated cloning for private and org repos
+- **Repository metadata** — stars, forks, language, description, last updated, public/private status
+- **Manual mode preserved** — pasting a repository URL still works without logging in
 
 ---
 
-## Repository Statistics
-
-Displays:
-
-- Total Python files
-- Total lines of code
-- Largest file
-- Largest file size
-
----
 
 ## Technology Stack Detection
 
@@ -160,6 +145,9 @@ github1/
 │   ├── dependency_analyzer.py
 │   ├── code_reviewer.py
 │   ├── tech_stack.py
+|   ├── github_auth.py 
+|   ├── github_api.py
+|   ├── github_loader.py
 │   └── repository_health.py
 │
 ├── chroma_db/
@@ -200,145 +188,83 @@ github1/
 
 ---
 
-# Installation
+## Setup
 
-## Clone Project
-
-```bash
-git clone <your-project-url>
-cd github1
-```
-
----
-
-## Create Virtual Environment
+### 1. Clone and install
 
 ```bash
+git clone <this-repo-url>
+cd your-project
 python -m venv .venv
-```
-
-Activate:
-
-### Windows
-
-```bash
-.venv\Scripts\activate
-```
-
-### Linux/Mac
-
-```bash
-source .venv/bin/activate
-```
-
----
-
-## Install Dependencies
-
-```bash
+.venv\Scripts\activate        # Windows
+# source .venv/bin/activate   # macOS/Linux
 pip install -r requirements.txt
 ```
 
----
+### 2. Environment variables
 
-# Environment Variables
-
-Create a `.env` file:
+Create a `.env` file in the project root:
 
 ```env
-MISTRALAI_API_KEY=your_api_key
+# Mistral AI
+MISTRALAI_API_KEY=your_mistral_api_key
 
+# GitHub OAuth (see below for how to get these)
+GITHUB_CLIENT_ID=your_github_client_id
+GITHUB_CLIENT_SECRET=your_github_client_secret
+GITHUB_REDIRECT_URI=http://localhost:8501
+
+# Optional
 REPO_STORAGE_PATH=repos
 ```
 
----
+### 3. Create a GitHub OAuth App
 
-# Run Application
+1. Go to **GitHub → Settings → Developer settings → OAuth Apps → New OAuth App**
+2. Fill in:
+   - **Application name**: anything recognizable, e.g. `GitHub Repository Assistant`
+   - **Homepage URL**: `http://localhost:8501`
+   - **Authorization callback URL**: `http://localhost:8501` (must exactly match `GITHUB_REDIRECT_URI`)
+3. Click **Register application**
+4. Copy the **Client ID**, then click **Generate a new client secret** and copy it immediately (shown only once)
+5. Paste both into your `.env`
+
+> If you deploy this app elsewhere, update both the OAuth App's callback URL and `GITHUB_REDIRECT_URI` to match the deployed address. A GitHub OAuth App supports only one callback URL at a time.
+
+### 4. Run the app
 
 ```bash
 streamlit run app.py
 ```
 
-Application URL:
+---
 
-```text
-http://localhost:8501
-```
+## Usage
+
+**Manual mode** — paste a public repository URL into the text field and click **Process Repository**.
+
+**GitHub mode** — click **Login with GitHub** in the sidebar, authorize the app, then use the **Repository Explorer** to search/select one of your repositories and click **Load Repository**. This works for public, private, and organization repos.
+
+Once a repository is loaded, use the sidebar to jump between Repository Actions (summary, dependencies, tech stack, code review, architecture, file preview), fire off Quick Actions, or just start chatting at the bottom of the page.
 
 ---
 
-# Usage
+## Tech Stack
 
-## Step 1
-
-Paste a GitHub repository URL.
-
-Example:
-
-```text
-https://github.com/streamlit/streamlit
-```
+- **Streamlit** — UI
+- **Mistral AI** (`codestral-latest`) — chat completions, streaming, question classification
+- **ChromaDB** — vector storage
+- **sentence-transformers** (`BAAI/bge-small-en-v1.5`) — embeddings
+- **GitPython** — repository cloning
+- **GitHub OAuth / REST API** — login and repository access
 
 ---
 
-## Step 2
+## Notes
 
-Click:
-
-```text
-Process Repository
-```
-
----
-
-## Step 3
-
-Wait for:
-
-- Repository cloning
-- File reading
-- Chunk creation
-- Embedding generation
-- ChromaDB indexing
-
----
-
-## Step 4
-
-Explore:
-
-- Repository Summary
-- Statistics
-- Health Score
-- Tech Stack
-- Dependency Graph
-- AI Code Review
-
----
-
-## Step 5
-
-Ask questions in Repository Chat.
-
-Example:
-
-```text
-How does authentication work?
-```
-
-```text
-Explain repository architecture.
-```
-
-```text
-Which file contains the main application?
-```
-
-```text
-How do I run this project?
-```
-
----
+- Only Python (`.py`) files are indexed.
+- Each new repository load clears the previous ChromaDB collection before indexing the new one.
+- The health score is a simple heuristic based on file count and total line count — not a full static-analysis tool.
 
 # Future Enhancements
 
