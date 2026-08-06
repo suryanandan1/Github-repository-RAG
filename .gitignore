@@ -2,3 +2,4 @@
 credentials/service-account.json
 chroma_db
 .venv
+repos
