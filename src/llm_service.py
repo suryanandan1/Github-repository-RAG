@@ -22,23 +22,92 @@ def _build_prompt(
     return f"""
 You are a senior software engineer.
 
-Chat History:
-{chat_history}
-
 Repository Context:
 {context}
 
-Question:
+Conversation History:
+{chat_history}
+
+Current Question:
 {question}
 
 Rules:
 1. If the question is about the repository, answer using repository context.
-2. Mention filenames whenever possible.
+2. Mention filenames, classes, and functions whenever available.
 3. If repository information is insufficient, say so.
-4. If the question is a general software/programming question unrelated to the repository, answer normally using your knowledge.
+4. If the question is a general software/programming question unrelated to the repository, answer normally using your knowledge, without relying on repository context.
 5. Clearly separate repository-based answers from general knowledge.
 6. Do not invent code that is not present in the repository.
+7. Use the conversation history to resolve follow-up questions - e.g. "it", "this", "the project" usually refer back to the repository being discussed.
 """
+
+
+def classify_question(question, chat_history=""):
+    """
+    Decide whether a question is about the repository currently
+    being discussed (including follow-ups that refer back to it,
+    e.g. "who created it") or a general software/programming
+    knowledge question unrelated to any specific repository.
+
+    Returns "repository" or "general". Defaults to "repository" on
+    any classification failure, since repository context rarely
+    hurts a general answer (the main prompt's rules already tell
+    the model to fall back to general knowledge when context isn't
+    relevant) - it's just wasted retrieval, not a correctness risk.
+    """
+
+    prompt = f"""
+You are a classifier for a repository chat assistant.
+
+Conversation History:
+{chat_history}
+
+Question:
+{question}
+
+Decide whether this question is about the specific GitHub
+repository being discussed - its code, files, structure, purpose,
+authorship, dependencies, classes, functions, etc. - including
+follow-up questions that refer back to it using words like "it",
+"this", "the project", "the repo". If so, reply REPOSITORY.
+
+Otherwise, if it is a general software/programming knowledge
+question unrelated to this specific repository (e.g. "What is
+Python?", "What is OOP?"), reply GENERAL.
+
+Reply with exactly one word: REPOSITORY or GENERAL. No punctuation,
+no explanation.
+"""
+
+    try:
+
+        response = client.chat.complete(
+            model=MODEL_NAME,
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ]
+        )
+
+        answer = (
+            response
+            .choices[0]
+            .message
+            .content
+            .strip()
+            .upper()
+        )
+
+        if "GENERAL" in answer:
+            return "general"
+
+        return "repository"
+
+    except Exception:
+
+        return "repository"
 
 
 def ask_repository(

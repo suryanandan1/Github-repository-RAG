@@ -9,7 +9,11 @@ from src.chunker import create_chunks
 from src.vector_store import VectorStore
 from src.mistral_embeddings import generate_embedding
 from src.retriever import retrieve_context
-from src.llm_service import ask_repository, ask_repository_stream
+from src.llm_service import (
+    ask_repository,
+    ask_repository_stream,
+    classify_question
+)
 
 from src.file_reader import (
     get_python_files,
@@ -651,6 +655,8 @@ with st.sidebar:
     st.header("Chat History")
 
     if st.button("New Chat", use_container_width=True):
+        # Clears the conversation only - the cloned repository,
+        # its embeddings, and everything in ChromaDB are untouched.
         st.session_state.messages = []
         st.rerun()
 
@@ -662,9 +668,16 @@ with st.sidebar:
             st.session_state.messages
         ):
             if msg["role"] == "user":
-                st.write(
-                    f"{idx + 1}. {msg['content'][:40]}"
-                )
+
+                if st.button(
+                    f"{idx + 1}. {msg['content'][:40]}",
+                    key=f"history_{idx}",
+                    use_container_width=True
+                ):
+                    st.session_state.selected_question = (
+                        msg["content"]
+                    )
+                    st.rerun()
     else:
         st.caption("No previous questions yet.")
 
@@ -694,45 +707,87 @@ with st.sidebar:
     st.divider()
 
     # ------------------------------
-    # Quick Questions
+    # Quick Actions
     # ------------------------------
 
-    st.header("Quick Questions")
+    st.header("Quick Actions")
 
-    if st.button("Explain Architecture", use_container_width=True):
-        st.session_state.selected_question = (
-            "Explain repository architecture"
-        )
+    quick_actions_disabled = not st.session_state.repo_loaded
 
-    if st.button("Main Classes", use_container_width=True):
+    if st.button(
+        "Summarize Repository",
+        use_container_width=True,
+        disabled=quick_actions_disabled
+    ):
         st.session_state.selected_question = (
-            "List all important classes and explain them"
+            "Give me a summary of this repository."
         )
+        st.rerun()
 
-    if st.button("Main Functions", use_container_width=True):
+    if st.button(
+        "Explain Architecture",
+        use_container_width=True,
+        disabled=quick_actions_disabled
+    ):
         st.session_state.selected_question = (
-            "List all important functions and explain them"
+            "Explain the architecture of this repository."
         )
+        st.rerun()
 
-    if st.button("How To Run", use_container_width=True):
+    if st.button(
+        "List Main Classes",
+        use_container_width=True,
+        disabled=quick_actions_disabled
+    ):
         st.session_state.selected_question = (
-            "Explain how to run this project step by step"
+            "List all important classes in this repository "
+            "and explain them."
         )
+        st.rerun()
 
-    if st.button("Potential Bugs", use_container_width=True):
+    if st.button(
+        "List Main Functions",
+        use_container_width=True,
+        disabled=quick_actions_disabled
+    ):
         st.session_state.selected_question = (
-            "Find possible bugs and issues in this repository"
+            "List all important functions in this repository "
+            "and explain them."
         )
+        st.rerun()
 
-    if st.button("Code Improvements", use_container_width=True):
+    if st.button(
+        "Show Dependencies",
+        use_container_width=True,
+        disabled=quick_actions_disabled
+    ):
         st.session_state.selected_question = (
-            "Suggest improvements for this repository"
+            "What are the dependencies and imports used in "
+            "this repository?"
         )
+        st.rerun()
 
-    if st.button("Main Files", use_container_width=True):
+    if st.button(
+        "Show Tech Stack",
+        use_container_width=True,
+        disabled=quick_actions_disabled
+    ):
         st.session_state.selected_question = (
-            "What are the most important files in this repository?"
+            "What technologies, frameworks, and libraries are "
+            "used in this repository?"
         )
+        st.rerun()
+
+    if st.button(
+        "Show Repository Health",
+        use_container_width=True,
+        disabled=quick_actions_disabled
+    ):
+        st.session_state.selected_question = (
+            "What is the health status of this repository, and "
+            "what could be improved?"
+        )
+        st.rerun()
 
 # --------------------------------------------------
 # Process Repository (Manual URL Mode)
@@ -1037,23 +1092,47 @@ if (
             question
         )
 
-    with st.spinner(
-        "Searching repository..."
-    ):
-
-        context = retrieve_context(
-            question
-        )
-
+    # Last 10 messages (including the question just asked) give
+    # the model conversation memory, so follow-ups like "who
+    # created it" can resolve "it" back to the repository.
     chat_history = ""
 
     for msg in (
-        st.session_state.messages[-6:]
+        st.session_state.messages[-10:]
     ):
 
         chat_history += (
             f"{msg['role']}: "
             f"{msg['content']}\n"
+        )
+
+    with st.spinner(
+        "Understanding your question..."
+    ):
+
+        question_type = classify_question(
+            question,
+            chat_history
+        )
+
+    if question_type == "repository":
+
+        with st.spinner(
+            "Searching repository..."
+        ):
+
+            context = retrieve_context(
+                question
+            )
+
+    else:
+
+        # General programming/software knowledge question - skip
+        # repository retrieval entirely and let the model answer
+        # from its own knowledge.
+        context = (
+            "Not applicable - this is a general knowledge "
+            "question unrelated to the repository."
         )
 
     with st.chat_message(
