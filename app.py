@@ -63,6 +63,23 @@ from src.commit_service import (
     CommitServiceError
 )
 
+from src.github_commits import (
+    get_commits,
+    get_commit_details,
+    GitHubCommitsError
+)
+
+from src.github_activity import (
+    get_developer_activity,
+    get_commit_timeline,
+    filter_commits_by_days,
+    get_last_updated_status,
+    is_activity_question,
+    build_activity_context,
+    generate_activity_summary,
+    GitHubActivityError
+)
+
 load_dotenv()
 
 REPO_STORAGE_PATH = os.getenv(
@@ -165,6 +182,20 @@ if "commit_summary" not in st.session_state:
 if "commit_stats" not in st.session_state:
     st.session_state.commit_stats = {}
 
+# ---- Repository Activity Intelligence state (Phase 6.5) ----
+
+if "activity_commits" not in st.session_state:
+    st.session_state.activity_commits = []
+
+if "activity_summary_text" not in st.session_state:
+    st.session_state.activity_summary_text = ""
+
+if "commit_search_query" not in st.session_state:
+    st.session_state.commit_search_query = ""
+
+if "timeline_range_days" not in st.session_state:
+    st.session_state.timeline_range_days = 30
+
 
 def extract_repo_full_name(url):
     """
@@ -245,6 +276,13 @@ def process_repository(clone_url, display_url):
     st.session_state.commits = []
     st.session_state.commit_stats = {}
     st.session_state.commit_summary = ""
+
+    # Repository Activity Intelligence - independent feature, same
+    # reasoning: don't let activity data from a previous repo
+    # linger once a different repository is processed.
+    st.session_state.activity_commits = []
+    st.session_state.activity_summary_text = ""
+    st.session_state.commit_search_query = ""
 
     clone_path = os.path.join(
         REPO_STORAGE_PATH,
@@ -651,7 +689,7 @@ with st.sidebar:
         )
 
     if st.button(
-        "Load Commit History",
+        "📜 Load Commit History",
         use_container_width=True,
         disabled=not st.session_state.repo_loaded
     ):
@@ -798,6 +836,112 @@ with st.sidebar:
     ):
         st.session_state.current_view = "dashboard"
         st.rerun()
+
+    st.divider()
+
+    # ------------------------------
+    # Repository Activity (Phase 6.5)
+    # ------------------------------
+
+    st.header("Repository Activity")
+
+    activity_disabled = not st.session_state.repo_loaded
+
+    if st.button(
+        "Commit History",
+        use_container_width=True,
+        disabled=activity_disabled
+    ):
+        try:
+            with st.spinner("Fetching commit history..."):
+                st.session_state.activity_commits = get_commits(
+                    st.session_state.github_token,
+                    active_repo_name,
+                    limit=50
+                )
+            st.session_state.current_view = "activity_history"
+            st.rerun()
+        except GitHubCommitsError as e:
+            st.error(str(e))
+
+    if st.button(
+        "Developer Activity",
+        use_container_width=True,
+        disabled=activity_disabled
+    ):
+        try:
+            if not st.session_state.activity_commits:
+                with st.spinner("Fetching commit history..."):
+                    st.session_state.activity_commits = get_commits(
+                        st.session_state.github_token,
+                        active_repo_name,
+                        limit=100
+                    )
+            st.session_state.current_view = "activity_developer"
+            st.rerun()
+        except GitHubCommitsError as e:
+            st.error(str(e))
+
+    if st.button(
+        "Commit Timeline",
+        use_container_width=True,
+        disabled=activity_disabled
+    ):
+        try:
+            if not st.session_state.activity_commits:
+                with st.spinner("Fetching commit history..."):
+                    st.session_state.activity_commits = get_commits(
+                        st.session_state.github_token,
+                        active_repo_name,
+                        limit=100
+                    )
+            st.session_state.current_view = "activity_timeline"
+            st.rerun()
+        except GitHubCommitsError as e:
+            st.error(str(e))
+
+    if st.button(
+        "Recent Changes",
+        use_container_width=True,
+        disabled=activity_disabled
+    ):
+        try:
+            if not st.session_state.activity_commits:
+                with st.spinner("Fetching commit history..."):
+                    st.session_state.activity_commits = get_commits(
+                        st.session_state.github_token,
+                        active_repo_name,
+                        limit=20
+                    )
+            st.session_state.current_view = "activity_recent_changes"
+            st.rerun()
+        except GitHubCommitsError as e:
+            st.error(str(e))
+
+    if st.button(
+        "Activity Summary",
+        use_container_width=True,
+        disabled=activity_disabled
+    ):
+        try:
+            if not st.session_state.activity_commits:
+                with st.spinner("Fetching commit history..."):
+                    st.session_state.activity_commits = get_commits(
+                        st.session_state.github_token,
+                        active_repo_name,
+                        limit=100
+                    )
+            with st.spinner("Generating activity summary..."):
+                st.session_state.activity_summary_text = (
+                    generate_activity_summary(
+                        st.session_state.activity_commits,
+                        days=30
+                    )
+                )
+            st.session_state.current_view = "activity_summary"
+            st.rerun()
+        except (GitHubCommitsError, GitHubActivityError) as e:
+            st.error(str(e))
 
     st.divider()
 
@@ -1186,6 +1330,325 @@ else:
             st.session_state.architecture_analysis
         )
 
+    # ------------------------------
+    # Repository Activity: Commit History
+    # ------------------------------
+
+    elif current_view == "activity_history":
+
+        st.subheader("Commit History")
+
+        search_col, clear_col = st.columns([4, 1])
+
+        with search_col:
+            search_query = st.text_input(
+                "Search commits (author, message, or SHA)",
+                value=st.session_state.commit_search_query
+            )
+
+        with clear_col:
+            st.write("")
+            if st.button("Clear Search", use_container_width=True):
+                st.session_state.commit_search_query = ""
+                st.rerun()
+
+        st.session_state.commit_search_query = search_query
+
+        commits_to_show = st.session_state.activity_commits
+
+        if search_query:
+
+            query_lower = search_query.strip().lower()
+
+            commits_to_show = [
+                c for c in commits_to_show
+                if query_lower in c["message"].lower()
+                or query_lower in c["sha"].lower()
+                or query_lower in c["author_name"].lower()
+            ]
+
+        if not commits_to_show:
+            st.info(
+                "No commits match your search."
+                if search_query else
+                "No commits found."
+            )
+
+        for commit in commits_to_show:
+
+            with st.expander(
+                f"{commit['message_title']}  ·  {commit['short_sha']}"
+            ):
+
+                avatar_col, info_col = st.columns([1, 4])
+
+                with avatar_col:
+                    if commit.get("author_avatar"):
+                        st.image(
+                            commit["author_avatar"],
+                            width=48
+                        )
+
+                with info_col:
+
+                    st.write(
+                        f"**Author:** {commit['author_name']}"
+                    )
+
+                    st.write(
+                        f"**Date:** "
+                        f"{commit['date'][:10] if commit['date'] else '—'}"
+                    )
+
+                    st.write(
+                        f"**SHA:** `{commit['sha']}`"
+                    )
+
+                    if commit.get("branch"):
+                        st.write(
+                            f"**Branch:** {commit['branch']}"
+                        )
+
+                    if commit.get("url"):
+                        st.markdown(
+                            f"[View on GitHub]({commit['url']})"
+                        )
+
+    # ------------------------------
+    # Repository Activity: Developer Activity
+    # ------------------------------
+
+    elif current_view == "activity_developer":
+
+        st.subheader("Developer Activity")
+
+        developer_activity = get_developer_activity(
+            st.session_state.activity_commits
+        )
+
+        if not developer_activity:
+            st.info("No commit data available.")
+
+        else:
+
+            rows = [
+                {
+                    "Contributor": dev["name"],
+                    "Commits": dev["commits"],
+                    "Last Commit": (
+                        dev["last_commit_date"] or ""
+                    )[:10]
+                }
+                for dev in developer_activity
+            ]
+
+            st.dataframe(
+                rows,
+                use_container_width=True
+            )
+
+            st.bar_chart(
+                data=pd.Series(
+                    {
+                        dev["name"]: dev["commits"]
+                        for dev in developer_activity
+                    },
+                    name="Commits"
+                )
+            )
+
+            st.success(
+                f"Most Active Contributor: "
+                f"{developer_activity[0]['name']}"
+            )
+
+    # ------------------------------
+    # Repository Activity: Commit Timeline
+    # ------------------------------
+
+    elif current_view == "activity_timeline":
+
+        st.subheader("Commit Timeline")
+
+        range_options = [7, 30, 90]
+
+        range_choice = st.radio(
+            "Time Range",
+            options=range_options,
+            format_func=lambda d: f"{d} days",
+            horizontal=True,
+            index=range_options.index(
+                st.session_state.timeline_range_days
+            )
+        )
+
+        st.session_state.timeline_range_days = range_choice
+
+        filtered_commits = filter_commits_by_days(
+            st.session_state.activity_commits,
+            range_choice
+        )
+
+        if not filtered_commits:
+            st.info(
+                f"No commits in the last {range_choice} days."
+            )
+
+        else:
+
+            st.metric(
+                "Commits in Range",
+                len(filtered_commits)
+            )
+
+            st.markdown("**Commits per Day**")
+            daily = get_commit_timeline(
+                filtered_commits,
+                granularity="day"
+            )
+            st.bar_chart(
+                pd.Series(daily, name="Commits")
+            )
+
+            st.markdown("**Commits per Week**")
+            weekly = get_commit_timeline(
+                filtered_commits,
+                granularity="week"
+            )
+            st.bar_chart(
+                pd.Series(weekly, name="Commits")
+            )
+
+            st.markdown("**Commits per Month**")
+            monthly = get_commit_timeline(
+                filtered_commits,
+                granularity="month"
+            )
+            st.bar_chart(
+                pd.Series(monthly, name="Commits")
+            )
+
+    # ------------------------------
+    # Repository Activity: Recent Changes
+    # ------------------------------
+
+    elif current_view == "activity_recent_changes":
+
+        st.subheader("Recent Changes")
+
+        if not st.session_state.activity_commits:
+            st.info("No recent commits available.")
+
+        else:
+
+            for commit in st.session_state.activity_commits[:10]:
+
+                with st.expander(
+                    f"{commit['message_title']}  ·  "
+                    f"{commit['short_sha']}"
+                ):
+
+                    st.write(
+                        f"**Author:** {commit['author_name']}"
+                    )
+
+                    st.write(
+                        f"**Date:** "
+                        f"{commit['date'][:10] if commit['date'] else '—'}"
+                    )
+
+                    st.write(
+                        f"**Full SHA:** `{commit['sha']}`"
+                    )
+
+                    detail_key = f"details_result_{commit['sha']}"
+
+                    if st.button(
+                        "View Changed Files",
+                        key=f"details_btn_{commit['sha']}"
+                    ):
+                        try:
+                            with st.spinner(
+                                "Fetching commit details..."
+                            ):
+                                st.session_state[detail_key] = (
+                                    get_commit_details(
+                                        st.session_state.github_token,
+                                        active_repo_name,
+                                        commit["sha"]
+                                    )
+                                )
+                        except GitHubCommitsError as e:
+                            st.error(str(e))
+
+                    details = st.session_state.get(detail_key)
+
+                    if details:
+
+                        st.write(
+                            f"**Additions:** +{details['additions']}"
+                        )
+
+                        st.write(
+                            f"**Deletions:** -{details['deletions']}"
+                        )
+
+                        st.write("**Files Changed:**")
+
+                        for f in details["files"]:
+                            st.write(
+                                f"- {f['filename']} "
+                                f"({f['status']}, "
+                                f"+{f['additions']}/-{f['deletions']})"
+                            )
+
+    # ------------------------------
+    # Repository Activity: Activity Summary
+    # ------------------------------
+
+    elif current_view == "activity_summary":
+
+        st.subheader("Activity Summary")
+
+        status = get_last_updated_status(
+            st.session_state.activity_commits
+        )
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            st.metric(
+                "Last Commit",
+                (status["last_commit_date"] or "—")[:10]
+                if status["last_commit_date"] else "—"
+            )
+
+        with col2:
+            st.metric(
+                "Days Since Last Commit",
+                status["days_since_last_commit"]
+                if status["days_since_last_commit"] is not None
+                else "—"
+            )
+
+        with col3:
+            st.metric(
+                "Activity Status",
+                status["status"]
+            )
+
+        st.divider()
+
+        if st.session_state.activity_summary_text:
+            st.markdown(
+                st.session_state.activity_summary_text
+            )
+        else:
+            st.info(
+                "Click 'Activity Summary' in the sidebar to "
+                "generate one."
+            )
+
 # --------------------------------------------------
 # Commit History (Commit Intelligence)
 # --------------------------------------------------
@@ -1354,12 +1817,58 @@ if (
         "Understanding your question..."
     ):
 
-        question_type = classify_question(
-            question,
-            chat_history
-        )
+        if is_activity_question(question, chat_history):
+            question_type = "activity"
+        else:
+            question_type = classify_question(
+                question,
+                chat_history
+            )
 
-    if question_type == "repository":
+    if question_type == "activity":
+
+        # Commit/contributor/recent-activity questions use live
+        # GitHub Commit API data instead of ChromaDB retrieval.
+        try:
+
+            with st.spinner(
+                "Checking repository activity..."
+            ):
+
+                activity_commits_for_chat = (
+                    st.session_state.activity_commits
+                    or get_commits(
+                        st.session_state.github_token,
+                        active_repo_name,
+                        limit=50
+                    )
+                )
+
+                st.session_state.activity_commits = (
+                    activity_commits_for_chat
+                )
+
+                developer_activity = get_developer_activity(
+                    activity_commits_for_chat
+                )
+
+                activity_status = get_last_updated_status(
+                    activity_commits_for_chat
+                )
+
+                context = build_activity_context(
+                    activity_commits_for_chat,
+                    developer_activity,
+                    activity_status
+                )
+
+        except GitHubCommitsError as e:
+
+            context = (
+                f"Commit activity data could not be retrieved: {e}"
+            )
+
+    elif question_type == "repository":
 
         with st.spinner(
             "Searching repository..."
